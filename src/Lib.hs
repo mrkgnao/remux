@@ -1,17 +1,80 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveFunctor              #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings          #-}
 
 module Lib where
 
 import           Colors
+
 import qualified Data.ByteString      as B
 import qualified Data.ByteString.Lazy as BL
+
 import           Data.Monoid          ((<>))
+
 import           Data.Text            (Text)
 import qualified Data.Text            as T
 import qualified Data.Text.Encoding   as T
 import qualified Data.Text.IO         as T
+import qualified Data.Text.Read       as T
+
+import           Control.Monad.Except
+
 import           GHC.IO.Exception     (ExitCode, ExitCode (..))
 import qualified System.Process.Typed as P
+
+
+
+data FormattedBlock = Block
+  { value :: Text
+  , fg    :: Color
+  , bg    :: Color
+  , bold  :: Bool
+  }
+
+render :: FormattedBlock -> Text
+render (Block val fg bg bold) = go val fg bg bold
+  where
+    go :: Text -> Color -> Color -> Bool -> Text
+    go v f b bold = "#["
+                 <> "bg=" <> code b
+                 <> ","
+                 <> "fg=" <> code f
+                 <> (if bold then ",bold]" else "]")
+                 <> v
+
+renderPad :: FormattedBlock -> Text
+renderPad (Block val fg bg bold) = go val fg bg bold
+  where
+    go :: Text -> Color -> Color -> Bool -> Text
+    go v f b bold = "#["
+                 <> "bg=" <> code b
+                 <> ","
+                 <> "fg=" <> code f
+                 <> (if bold then ",bold]" else "]")
+                 <> " " <> v <> " "
+
+newtype ErrorCode = ErrorCode Int
+newtype ShellCmd  = ShellCmd Text
+newtype Result a = Result
+  { unR :: ExceptT ErrorCode IO a
+  } deriving ( Functor
+             , Applicative
+             , Monad
+             , MonadError ErrorCode
+             , MonadIO
+             )
+
+cmd = ShellCmd
+
+readShell :: ShellCmd -> Result Text
+readShell (ShellCmd cmd) = do
+  (err, out, errText) <- liftIO . P.readProcess . P.shell $ T.unpack cmd
+  -- case err of
+    -- ExitSuccess      -> pure (T.decodeUtf8 $ BL.toStrict out)
+  pure (T.decodeUtf8 $ BL.toStrict out)
+    -- ExitFailure code -> do
+    --   liftIO $ putStrLn "Error!"
+    --   throwError (ErrorCode code)
 
 {-
 set -g status-position bottom
@@ -25,46 +88,60 @@ set -g status-right-length 100
 set -g status-left-length 20
 -}
 
+time = do
+  let dateCmd = "date +%H:%M:%S"
+  time <- readShell (cmd dateCmd)
+  let fg = color "#dddddd"
+      bg = color "#333333"
+      str = T.init time
 
-data AlertSegment = Alert
-  { value :: Text
-  , fg    :: Color
-  , bg    :: Color
-  , bold  :: Bool
-  }
+  let block = Block { value = str, fg = fg, bg = bg, bold = False }
+  liftIO $ T.putStr (renderPad block)
 
-render :: AlertSegment -> Text
-render (Alert val fg bg bold) = go val fg bg bold
-  where
-    go :: Text -> Color -> Color -> Bool -> Text
-    go v f b bold = "#["
-                 <> "bg=" <> renderColor b
-                 <> ","
-                 <> "fg=" <> renderColor f
-                 <> (if bold then ",bold]" else "]")
-                 <> v
+backlight = do
+  let xbacklightCmd = "xbacklight | cut -d'.' -f1"
+  blLevel' <- readShell (cmd xbacklightCmd)
+  let (Right blLevel) = fst <$> T.decimal blLevel'
+  let fg = color "#7aa6da"
+      bg = color "#333333"
+      str = T.pack $ show blLevel <> "*"
 
-newtype ErrorCode = ErrorCode Int
-newtype ShellCmd  = ShellCmd Text
-type CmdResult = Either ErrorCode Text
-type Result a = IO (Either ErrorCode a)
+  let block = Block { value = str, fg = fg, bg = bg, bold = True }
+  liftIO $ T.putStr (renderPad block)
 
-readShell :: ShellCmd -> IO CmdResult
-readShell (ShellCmd cmd) = do
-  (err, out, errText) <- P.readProcess (P.shell $ T.unpack cmd)
-  pure $ -- trying hard to not bimap here, or even either
-    case err of
-      ExitSuccess      -> Right (T.decodeUtf8 $ BL.toStrict out)
-      ExitFailure code -> Left (ErrorCode code)
+battery = do
+  let
+    percRegex = "s/.*, ([0-9]*)%.*/\\1/"
+    percCmd   = "acpi -b | sed -r '" <> percRegex <> "'"
+    statusCmd = "acpi -b | grep -c 'Dis'"
 
-createSegment :: ShellCmd
-              -> (Text -> AlertSegment)
-              -> Result AlertSegment
-createSegment cmd go =
-  (fmap . fmap) go (readShell cmd)
+  perc' <- readShell (cmd percCmd)
+  let (Right perc) = fst <$> T.decimal perc'
 
-statusLine :: Result AlertSegment -> Result Text
-statusLine = (fmap . fmap) render
+  stat' <- readShell (cmd statusCmd)
+  let (Right charging)  = (==0) . fst <$> T.decimal stat'
 
-someFunc :: IO ()
-someFunc = putStrLn "someFunc"
+  let str = case perc of
+        100       -> "100"
+        otherwise -> (T.pack $ show perc)
+                  <> (if charging then "+" else "-")
+
+  let fg = if charging then color "#b9ca4a" else color "#d54e53"
+      bg = color "#111111"
+
+  let block = Block { value = str, fg = fg, bg = bg, bold = True }
+  liftIO $ T.putStr (renderPad block)
+
+separator = liftIO $ T.putStr $ render $
+  Block { value = " "
+        , fg = color "#000000"
+        , bg = color "#000000"
+        , bold = False }
+
+runR = runExceptT . unR
+
+renderBar :: IO ()
+renderBar = do
+  forM_ [time, backlight, battery] $ \segment -> do
+    runR separator
+    runR segment
