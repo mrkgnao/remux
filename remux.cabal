@@ -1,0 +1,45 @@
+name:                remux
+version:             0.1.0.0
+-- synopsis:
+-- description:
+homepage:            https://github.com/mrkgnao/remux#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Soham Chowdhury
+maintainer:          chow.soham@gmail.com
+copyright:           Soham Chowdhury, 2017-the end of time
+category:            Web
+build-type:          Simple
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     Lib
+                     , Colors
+  build-depends:       base >= 4.7 && < 5
+                     , text
+                     , typed-process
+                     , bytestring >= 0.10
+  default-language:    Haskell2010
+
+executable remux-exe
+  hs-source-dirs:      app
+  main-is:             Main.hs
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  build-depends:       base
+                     , remux
+  default-language:    Haskell2010
+
+test-suite remux-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  build-depends:       base
+                     , remux
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  default-language:    Haskell2010
+
+source-repository head
+  type:     git
+  location: https://github.com/mrkgnao/remux
